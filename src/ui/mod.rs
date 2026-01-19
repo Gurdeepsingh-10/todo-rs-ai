@@ -15,12 +15,16 @@ pub struct AppState {
     pub show_help: bool,
     pub task_manager: Option<crate::core::TaskManager>,
     pub editing_task: Option<String>, 
+    pub current_user: Option<crate::sync::User>,  // Add this
+    pub sync_manager: Option<crate::sync::SyncManager>
 }
 
 pub enum Mode {
     Normal,
     Command,
     Edit,
+    Login,      // Add this
+    Register,
 }
 
 impl AppState {
@@ -32,7 +36,9 @@ impl AppState {
             command_input: String::new(),
             show_help: false,
             task_manager: None,
-            editing_task: None,  // Add this
+            editing_task: None,
+            current_user: None,
+            sync_manager: None,
         }
     }
 
@@ -58,6 +64,12 @@ impl AppState {
 pub fn render(f: &mut Frame, state: &AppState) {
     if state.show_help {
         render_help(f);
+        return;
+    }
+
+    // Show login prompt if not logged in
+    if state.current_user.is_none() && matches!(state.mode, Mode::Login | Mode::Register) {
+        render_auth(f, state);
         return;
     }
 
@@ -111,7 +123,10 @@ pub fn render(f: &mut Frame, state: &AppState) {
         }
         Mode::Command => &format!(":{}", state.command_input),
         Mode::Edit => &format!("Edit: {}", state.command_input),
+        Mode::Login => "Login mode",
+        Mode::Register => "Register mode",
     };
+
 
     let status = Paragraph::new(status_text)
         .style(Style::default().fg(Color::White))
@@ -143,6 +158,7 @@ fn render_help(f: &mut Frame) {
         Line::from(""),
         Line::from("  :done                    - Mark selected task as done"),
         Line::from(""),
+        Line::from("  :sync              - Sync tasks"),
         Line::from("  :quit or :q              - Quit application"),
         Line::from(""),
         Line::from(vec![Span::styled("Edit/Command Mode Controls:", Style::default().fg(Color::Yellow))]),
@@ -159,4 +175,26 @@ fn render_help(f: &mut Frame) {
     
     let area = f.size();
     f.render_widget(help, area);
+}
+
+fn render_auth(f: &mut Frame, state: &AppState) {
+    let (title, instruction) = match state.mode {
+        Mode::Login => ("Login", "Format: username password | Press : to register"),
+        Mode::Register => ("Register", "Format: username password email | Press Esc to go back"),
+        _ => ("Auth", ""),
+    };
+
+    let text = vec![
+        Line::from(vec![Span::styled(title, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
+        Line::from(""),
+        Line::from(instruction),
+        Line::from(""),
+        Line::from(format!("> {}", state.command_input)),
+    ];
+    
+    let para = Paragraph::new(text)
+        .block(Block::default().borders(Borders::ALL).title("Authentication"))
+        .alignment(Alignment::Left);
+    
+    f.render_widget(para, f.size());
 }
