@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bcrypt = "0.15"
+jsonwebtoken = "9.2"
+rand = "0.8"
 dotenv = "0.15"
 ratatui = "0.26"
 crossterm = "0.27"
