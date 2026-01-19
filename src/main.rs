@@ -15,12 +15,19 @@ use ratatui::{
 };
 use std::io;
 use ui::{AppState, Mode};
-use core::{Task, TaskManager};
+use core::{TaskManager, Priority};
+use dotenv::dotenv;
+use ai::AIAssistant;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+    
+    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
+    let ai = AIAssistant::new(api_key);
+    
     let db_path = std::env::current_dir()?.join("tasks.db");
-    let db_url = format!("sqlite:{}", db_path.display());
+    let db_url = format!("sqlite://{}", db_path.display());
     let task_manager = TaskManager::new(&db_url).await?;
     
     enable_raw_mode()?;
@@ -32,7 +39,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = AppState::new();
     state.task_manager = Some(task_manager);
     
-    // Load tasks
     if let Some(ref tm) = state.task_manager {
         state.tasks = tm.get_all_tasks().await?;
     }
@@ -63,6 +69,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char(':') => {
                             state.mode = Mode::Command;
                             state.command_input.clear();
+                        }
+                        KeyCode::Char('e') => {
+                            if let Some(task) = state.tasks.get(state.selected) {
+                                state.mode = Mode::Edit;
+                                state.command_input = task.title.clone();
+                                state.editing_task = Some(task.id.clone());
+                            }
+                        }
+                        KeyCode::Char('1') => {
+                            if let Some(task) = state.tasks.get_mut(state.selected) {
+                                task.priority = Priority::Low;
+                                if let Some(ref tm) = state.task_manager {
+                                    tm.update_task(task).await?;
+                                    state.tasks = tm.get_all_tasks().await?;
+                                }
+                            }
+                        }
+                        KeyCode::Char('2') => {
+                            if let Some(task) = state.tasks.get_mut(state.selected) {
+                                task.priority = Priority::Medium;
+                                if let Some(ref tm) = state.task_manager {
+                                    tm.update_task(task).await?;
+                                    state.tasks = tm.get_all_tasks().await?;
+                                }
+                            }
+                        }
+                        KeyCode::Char('3') => {
+                            if let Some(task) = state.tasks.get_mut(state.selected) {
+                                task.priority = Priority::High;
+                                if let Some(ref tm) = state.task_manager {
+                                    tm.update_task(task).await?;
+                                    state.tasks = tm.get_all_tasks().await?;
+                                }
+                            }
                         }
                         KeyCode::Char('g') => {
                             if g_pressed {
@@ -100,8 +140,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             state.command_input.clear();
                         }
                         KeyCode::Enter => {
-                            handle_command(&mut state).await?;
+                            handle_command(&mut state, &ai).await?;
                             state.mode = Mode::Normal;
+                        }
+                        KeyCode::Char(c) => {
+                            state.command_input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            state.command_input.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                Mode::Edit => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            state.mode = Mode::Normal;
+                            state.command_input.clear();
+                            state.editing_task = None;
+                        }
+                        KeyCode::Enter => {
+                            if let Some(task_id) = &state.editing_task {
+                                if let Some(ref tm) = state.task_manager {
+                                    if let Some(task) = state.tasks.iter_mut().find(|t| &t.id == task_id) {
+                                        task.title = state.command_input.clone();
+                                        let _ = tm.update_task(task).await;
+                                        state.tasks = tm.get_all_tasks().await?;
+                                    }
+                                }
+                            }
+                            state.mode = Mode::Normal;
+                            state.command_input.clear();
+                            state.editing_task = None;
                         }
                         KeyCode::Char(c) => {
                             state.command_input.push(c);
@@ -121,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn handle_command(state: &mut AppState) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Box<dyn std::error::Error>> {
     let parts: Vec<&str> = state.command_input.trim().split_whitespace().collect();
     if parts.is_empty() {
         return Ok(());
@@ -130,8 +200,8 @@ async fn handle_command(state: &mut AppState) -> Result<(), Box<dyn std::error::
     match parts[0] {
         "add" => {
             if parts.len() > 1 {
-                let title = parts[1..].join(" ");
-                let task = Task::new(title);
+                let input = parts[1..].join(" ");
+                let task = ai.parse_task(&input).await?;
                 
                 if let Some(ref tm) = state.task_manager {
                     tm.create_task(&task).await?;

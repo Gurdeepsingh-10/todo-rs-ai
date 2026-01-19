@@ -14,11 +14,13 @@ pub struct AppState {
     pub command_input: String,
     pub show_help: bool,
     pub task_manager: Option<crate::core::TaskManager>,
+    pub editing_task: Option<String>, 
 }
 
 pub enum Mode {
     Normal,
     Command,
+    Edit,
 }
 
 impl AppState {
@@ -30,6 +32,7 @@ impl AppState {
             command_input: String::new(),
             show_help: false,
             task_manager: None,
+            editing_task: None,  // Add this
         }
     }
 
@@ -49,11 +52,7 @@ impl AppState {
         }
     }
 
-    pub fn toggle_done(&mut self) {
-        if let Some(task) = self.tasks.get_mut(self.selected) {
-            task.done = !task.done;
-        }
-    }
+    
 }
 
 pub fn render(f: &mut Frame, state: &AppState) {
@@ -111,6 +110,7 @@ pub fn render(f: &mut Frame, state: &AppState) {
             "q: quit | j/k: navigate | space: toggle | :: command | ?: help"
         }
         Mode::Command => &format!(":{}", state.command_input),
+        Mode::Edit => &format!("Edit: {}", state.command_input),
     };
 
     let status = Paragraph::new(status_text)
@@ -123,32 +123,38 @@ fn render_help(f: &mut Frame) {
     let help_text = vec![
         Line::from(vec![Span::styled("KEYBOARD SHORTCUTS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
         Line::from(""),
-        Line::from("Navigation:"),
-        Line::from("  j / ↓     - Move down"),
-        Line::from("  k / ↑     - Move up"),
-        Line::from("  gg        - Go to top"),
-        Line::from("  G         - Go to bottom"),
+        Line::from(vec![Span::styled("Navigation:", Style::default().fg(Color::Yellow))]),
+        Line::from("  j / ↓         - Move down"),
+        Line::from("  k / ↑         - Move up"),
+        Line::from("  gg            - Go to top"),
+        Line::from("  G             - Go to bottom"),
         Line::from(""),
-        Line::from("Actions:"),
-        Line::from("  space     - Toggle task done"),
-        Line::from("  d         - Delete task"),
-        Line::from("  e         - Edit task"),
+        Line::from(vec![Span::styled("Actions:", Style::default().fg(Color::Yellow))]),
+        Line::from("  space         - Toggle task done/undone"),
+        Line::from("  d             - Delete selected task"),
+        Line::from("  e             - Edit selected task"),
+        Line::from("  1/2/3         - Set priority (1=Low, 2=Med, 3=High)"),
+        Line::from("  ?             - Toggle this help screen"),
+        Line::from("  q             - Quit application"),
         Line::from(""),
-        Line::from("Commands:"),
-        Line::from("  :add <task>     - Add new task"),
-        Line::from("  :done           - Mark as done"),
-        Line::from("  :ai <query>     - AI assistant"),
-        Line::from("  :sync           - Sync tasks"),
+        Line::from(vec![Span::styled("Command Mode (press :)", Style::default().fg(Color::Yellow))]),
+        Line::from("  :add <task>              - Add new task"),
+        Line::from("                             Example: :add Buy groceries"),
         Line::from(""),
-        Line::from("Other:"),
-        Line::from("  ?         - Toggle this help"),
-        Line::from("  q         - Quit"),
+        Line::from("  :done                    - Mark selected task as done"),
         Line::from(""),
-        Line::from(vec![Span::styled("Press ? to close", Style::default().fg(Color::Yellow))]),
+        Line::from("  :quit or :q              - Quit application"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Edit/Command Mode Controls:", Style::default().fg(Color::Yellow))]),
+        Line::from("  Esc           - Cancel and exit mode"),
+        Line::from("  Enter         - Confirm changes"),
+        Line::from("  Backspace     - Delete character"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Press ? to close this help", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]),
     ];
 
     let help = Paragraph::new(help_text)
-        .block(Block::default().borders(Borders::ALL).title("Help"))
+        .block(Block::default().borders(Borders::ALL).title("Help & Commands"))
         .alignment(Alignment::Left);
     
     let area = f.size();
