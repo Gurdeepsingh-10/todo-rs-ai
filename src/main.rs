@@ -3,6 +3,8 @@ mod core;
 mod ai;
 mod sync;
 mod config;
+use sync::SyncManager;
+use sqlx::SqlitePool;
 
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -29,15 +31,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = std::env::current_dir()?.join("tasks.db");
     let db_url = format!("sqlite://{}", db_path.display());
     let task_manager = TaskManager::new(&db_url).await?;
-    
+    let sync_pool = SqlitePool::connect(&db_url).await?;
+    let sync_manager = SyncManager::new(sync_pool).await?;
+
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    
+
+
 
     let mut state = AppState::new();
     state.task_manager = Some(task_manager);
+    state.sync_manager = Some(sync_manager);
+    state.mode = Mode::Login; 
     
     if let Some(ref tm) = state.task_manager {
         state.tasks = tm.get_all_tasks().await?;
@@ -52,6 +62,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Event::Key(key) = event::read()? {
             match state.mode {
+                Mode::Login => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            std::process::exit(0);
+                        }
+                        KeyCode::Enter => {
+                            let parts: Vec<&str> = state.command_input.split_whitespace().collect();
+                            if parts.len() == 2 {
+                                let username = parts[0];
+                                let password = parts[1];
+                                
+                                if let Some(ref sm) = state.sync_manager {
+                                    match sm.login(username, password).await {
+                                        Ok(user) => {
+                                            state.current_user = Some(user);
+                                            state.mode = Mode::Normal;
+                                            if let Some(ref tm) = state.task_manager {
+                                                state.tasks = tm.get_all_tasks().await?;
+                                            }
+                                        }
+                                        Err(_) => {
+                                            state.command_input = "Login failed. Type :register to register".to_string();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char(':') => {
+                            // Check if switching to register
+                            if state.command_input.is_empty() {
+                                state.mode = Mode::Register;
+                                state.command_input.clear();
+                            } else {
+                                state.command_input.push(':');
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            state.command_input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            state.command_input.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                Mode::Register => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            state.mode = Mode::Login;
+                            state.command_input.clear();
+                        }
+                        KeyCode::Enter => {
+                            let parts: Vec<&str> = state.command_input.split_whitespace().collect();
+                            if parts.len() == 3 {
+                                let username = parts[0];
+                                let password = parts[1];
+                                let email = parts[2];
+                                
+                                if let Some(ref sm) = state.sync_manager {
+                                    match sm.register(username, password, email).await {
+                                        Ok(user) => {
+                                            state.current_user = Some(user);
+                                            state.mode = Mode::Normal;
+                                        }
+                                        Err(_) => {
+                                            state.command_input = "Registration failed".to_string();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            state.command_input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            state.command_input.pop();
+                        }
+                        _ => {}
+                    }
+                }
                 Mode::Normal => {
                     match key.code {
                         KeyCode::Char('q') => break,
@@ -191,7 +281,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_command(
+    state: &mut AppState,
+    ai: &AIAssistant,
+) -> Result<(), Box<dyn std::error::Error>> {
+
     let parts: Vec<&str> = state.command_input.trim().split_whitespace().collect();
     if parts.is_empty() {
         return Ok(());
@@ -202,13 +296,14 @@ async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Bo
             if parts.len() > 1 {
                 let input = parts[1..].join(" ");
                 let task = ai.parse_task(&input).await?;
-                
+
                 if let Some(ref tm) = state.task_manager {
                     tm.create_task(&task).await?;
                     state.tasks = tm.get_all_tasks().await?;
                 }
             }
         }
+
         "done" => {
             if let Some(task) = state.tasks.get(state.selected) {
                 if let Some(ref tm) = state.task_manager {
@@ -217,12 +312,25 @@ async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Bo
                 }
             }
         }
+
+        "sync" => {
+            if let (Some(ref user), Some(ref sm)) =
+                (&state.current_user, &state.sync_manager)
+            {
+                sm.sync_tasks(&user.id, &state.tasks).await?;
+                state.command_input = "Tasks synced!".to_string();
+                return Ok(());
+            }
+        }
+
         "quit" | "q" => {
             std::process::exit(0);
         }
+
         _ => {}
     }
-    
+
     state.command_input.clear();
     Ok(())
 }
+
