@@ -7,6 +7,8 @@ use ratatui::{
 };
 use crate::core::{Task, Priority};
 
+use crate::config::{Config, CommandHistory};
+
 pub struct AppState {
     pub tasks: Vec<Task>,
     pub selected: usize,
@@ -14,9 +16,11 @@ pub struct AppState {
     pub command_input: String,
     pub show_help: bool,
     pub task_manager: Option<crate::core::TaskManager>,
-    pub editing_task: Option<String>, 
-    pub current_user: Option<crate::sync::User>,  // Add this
-    pub sync_manager: Option<crate::sync::SyncManager>
+    pub editing_task: Option<String>,
+    pub current_user: Option<crate::sync::User>,
+    pub sync_manager: Option<crate::sync::SyncManager>,
+    pub config: Config,                    // Add this
+    pub command_history: CommandHistory,   // Add this
 }
 
 pub enum Mode {
@@ -39,6 +43,8 @@ impl AppState {
             editing_task: None,
             current_user: None,
             sync_manager: None,
+            config: Config::load(),
+            command_history: CommandHistory::new(),
         }
     }
 
@@ -167,6 +173,11 @@ fn render_help(f: &mut Frame) {
         Line::from("  Backspace     - Delete character"),
         Line::from(""),
         Line::from(vec![Span::styled("Press ? to close this help", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]),
+        Line::from(vec![Span::styled("Configuration:", Style::default().fg(Color::Yellow))]),
+        Line::from("  :config                  - Show config location"),
+        Line::from("  :config <action> <key>   - Change keybinding"),
+        Line::from("                             Example: :config move_down h"),
+        Line::from(""),
     ];
 
     let help = Paragraph::new(help_text)
