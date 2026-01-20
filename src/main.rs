@@ -228,10 +228,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Esc => {
                             state.mode = Mode::Normal;
                             state.command_input.clear();
+                            state.command_history.reset();
                         }
                         KeyCode::Enter => {
+                            state.command_history.add(state.command_input.clone());
                             handle_command(&mut state, &ai).await?;
                             state.mode = Mode::Normal;
+                            state.command_history.reset();
+                        }
+                        KeyCode::Up => {
+                            if let Some(cmd) = state.command_history.previous() {
+                                state.command_input = cmd;
+                            }
+                        }
+                        KeyCode::Down => {
+                            if let Some(cmd) = state.command_history.next() {
+                                state.command_input = cmd;
+                            } else {
+                                state.command_input.clear();
+                            }
                         }
                         KeyCode::Char(c) => {
                             state.command_input.push(c);
@@ -320,6 +335,19 @@ async fn handle_command(
                 sm.sync_tasks(&user.id, &state.tasks).await?;
                 state.command_input = "Tasks synced!".to_string();
                 return Ok(());
+            }
+        }
+        "config" => {
+            if parts.len() == 1 {
+                state.command_input = format!("Config saved at: {:?}", dirs::home_dir().unwrap_or_default());
+            } else if parts.len() == 3 {
+                // :config <action> <key>
+                // Example: :config move_down h
+                let action = parts[1];
+                let key = parts[2];
+                state.config.keybindings.insert(action.to_string(), key.to_string());
+                let _ = state.config.save();
+                state.command_input = format!("Keybinding updated: {} -> {}", action, key);
             }
         }
 
