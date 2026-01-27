@@ -33,6 +33,7 @@ pub struct Task {
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub position: i32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -55,9 +56,9 @@ impl Task {
             tags: Vec::new(),
             created_at: now,
             updated_at: now,
+            position: 0,
         }
     }
 }
 
 pub mod cache;
-pub use cache::TaskCache;
