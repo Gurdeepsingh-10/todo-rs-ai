@@ -291,28 +291,4 @@ Guidelines:
 - Add unit tests for core parsing and sync logic
 - Keep dependencies up to date and minimal
 
----
 
-## Roadmap / Ideas
-
-- Improve AI JSON schema validation and error handling
-- Add more robust conflict resolution for multi-device editing
-- Add import/export (CSV / JSON)
-- Add plugin hooks for integrations (calendar, todo lists)
-- Add optional encrypted local storage
-
----
-
-## Security & Privacy
-
-- Sensitive keys (GROQ_API_KEY, SUPABASE_KEY) must be kept out of source control. Use `.env` or OS secret storage.
-- Local database `tasks.db` is stored locally; uninstall scripts do not remove user data by default.
-- When using Supabase, ensure you use appropriate service role keys and policies.
-
----
-
-## License
-
-This project is licensed under the MIT License — see LICENSE for details.
-
----
