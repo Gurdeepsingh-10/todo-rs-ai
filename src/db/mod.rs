@@ -25,6 +25,7 @@ pub struct SupabaseTask {
     pub tags: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub position: i32,
 }
 
 pub struct SupabaseClient {
@@ -106,20 +107,11 @@ impl SupabaseClient {
                 Priority::Medium => 2,
                 Priority::High => 3,
             },
-
-            // Line 170 - change from:
-            "priority": task.priority as i32,
-
-            // To:
-            "priority": match task.priority {
-                Priority::Low => 1,
-                Priority::Medium => 2,
-                Priority::High => 3,
-            },
             "due_date": task.due_date.map(|d| d.to_rfc3339()),
             "tags": task.tags,
             "created_at": task.created_at.to_rfc3339(),
             "updated_at": task.updated_at.to_rfc3339(),
+            "position": task.position,  // Add this
         });
 
         let response = self.client
@@ -144,7 +136,7 @@ impl SupabaseClient {
             .get(format!("{}/rest/v1/tasks", self.base_url))
             .header("apikey", &self.api_key)
             .query(&[("user_id", format!("eq.{}", user_id))])
-            .query(&[("order", "created_at.desc")])
+            .query(&[("order", "position.asc")])  // Changed from created_at.desc
             .send()
             .await?;
 
@@ -169,6 +161,7 @@ impl SupabaseClient {
                 tags: st.tags,
                 created_at: DateTime::parse_from_rfc3339(&st.created_at).unwrap().with_timezone(&Utc),
                 updated_at: DateTime::parse_from_rfc3339(&st.updated_at).unwrap().with_timezone(&Utc),
+                position: st.position,  // Add this
             }
         }).collect();
 
@@ -181,10 +174,15 @@ impl SupabaseClient {
             "title": task.title,
             "description": task.description,
             "done": task.done,
-            "priority": task.priority as i32,
+            "priority": match task.priority {
+                Priority::Low => 1,
+                Priority::Medium => 2,
+                Priority::High => 3,
+            },
             "due_date": task.due_date.map(|d| d.to_rfc3339()),
             "tags": task.tags,
             "updated_at": Utc::now().to_rfc3339(),
+            "position": task.position,  // Add this
         });
 
         let response = self.client
@@ -203,6 +201,27 @@ impl SupabaseClient {
 
         Ok(())
     }
+
+    //updating position of pre defined tasks
+    pub async fn update_positions(&self, tasks: &[Task]) -> Result<(), Box<dyn std::error::Error>> {
+        for task in tasks {
+            let update = json!({
+                "position": task.position,
+                "updated_at": Utc::now().to_rfc3339(),
+            });
+
+            self.client
+                .patch(format!("{}/rest/v1/tasks", self.base_url))
+                .header("apikey", &self.api_key)
+                .header("Content-Type", "application/json")
+                .query(&[("id", format!("eq.{}", task.id))])
+                .json(&update)
+                .send()
+                .await?;
+        }
+        Ok(())
+    }
+
 
     // Delete task
     pub async fn delete_task(&self, task_id: &str) -> Result<(), Box<dyn std::error::Error>> {
