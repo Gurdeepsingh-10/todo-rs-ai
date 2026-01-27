@@ -15,12 +15,12 @@ pub struct AppState {
     pub mode: Mode,
     pub command_input: String,
     pub show_help: bool,
-    pub task_manager: Option<crate::core::TaskManager>,
     pub editing_task: Option<String>,
-    pub current_user: Option<crate::sync::User>,
-    pub sync_manager: Option<crate::sync::SyncManager>,
-    pub config: Config,                    // Add this
-    pub command_history: CommandHistory,   // Add this
+    pub current_user: Option<crate::db::SupabaseUser>,  // Changed
+    pub config: Config,
+    pub command_history: CommandHistory,
+    pub status_message: Option<String>,
+    pub supabase: Option<crate::db::SupabaseClient>,   // Changed
 }
 
 pub enum Mode {
@@ -31,6 +31,7 @@ pub enum Mode {
     Register,
 }
 
+
 impl AppState {
     pub fn new() -> Self {
         Self {
@@ -39,12 +40,12 @@ impl AppState {
             mode: Mode::Normal,
             command_input: String::new(),
             show_help: false,
-            task_manager: None,
             editing_task: None,
             current_user: None,
-            sync_manager: None,
             config: Config::load(),
             command_history: CommandHistory::new(),
+            status_message: None,
+            supabase: None,
         }
     }
 
@@ -63,8 +64,6 @@ impl AppState {
             }
         }
     }
-
-    
 }
 
 pub fn render(f: &mut Frame, state: &AppState) {
