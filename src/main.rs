@@ -1,10 +1,8 @@
 mod ui;
 mod core;
 mod ai;
-mod sync;
 mod config;
-use sync::SyncManager;
-use sqlx::SqlitePool;
+mod db;
 
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -17,41 +15,39 @@ use ratatui::{
 };
 use std::io;
 use ui::{AppState, Mode};
-use core::{TaskManager, Priority};
+use core::Priority;
 use dotenv::dotenv;
 use ai::AIAssistant;
+use db::SupabaseClient;
+use log::{info, error};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+    info!("Starting TODO AI application");
+    
     dotenv().ok();
     
     let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
     let ai = AIAssistant::new(api_key);
     
-    let db_path = std::env::current_dir()?.join("tasks.db");
-    let db_url = format!("sqlite://{}", db_path.display());
-    let task_manager = TaskManager::new(&db_url).await?;
-    let sync_pool = SqlitePool::connect(&db_url).await?;
-    let sync_manager = SyncManager::new(sync_pool).await?;
-
-
+    // Initialize Supabase
+    let supabase_url = std::env::var("SUPABASE_URL")
+        .expect("SUPABASE_URL must be set in .env");
+    let supabase_key = std::env::var("SUPABASE_KEY")
+        .expect("SUPABASE_KEY must be set in .env");
+    
+    let supabase = SupabaseClient::new(supabase_url, supabase_key);
+    
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    
-
-
 
     let mut state = AppState::new();
-    state.task_manager = Some(task_manager);
-    state.sync_manager = Some(sync_manager);
-    state.mode = Mode::Login; 
-    
-    if let Some(ref tm) = state.task_manager {
-        state.tasks = tm.get_all_tasks().await?;
-    }
+    state.supabase = Some(supabase);
+    state.mode = Mode::Login;
 
     let mut g_pressed = false;
 
@@ -62,96 +58,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Event::Key(key) = event::read()? {
             match state.mode {
-                Mode::Login => {
-                    match key.code {
-                        KeyCode::Esc => {
-                            std::process::exit(0);
-                        }
-                        KeyCode::Enter => {
-                            let parts: Vec<&str> = state.command_input.split_whitespace().collect();
-                            if parts.len() == 2 {
-                                let username = parts[0];
-                                let password = parts[1];
-                                
-                                if let Some(ref sm) = state.sync_manager {
-                                    match sm.login(username, password).await {
-                                        Ok(user) => {
-                                            state.current_user = Some(user);
-                                            state.mode = Mode::Normal;
-                                            if let Some(ref tm) = state.task_manager {
-                                                state.tasks = tm.get_all_tasks().await?;
-                                            }
-                                        }
-                                        Err(_) => {
-                                            state.command_input = "Login failed. Type :register to register".to_string();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char(':') => {
-                            // Check if switching to register
-                            if state.command_input.is_empty() {
-                                state.mode = Mode::Register;
-                                state.command_input.clear();
-                            } else {
-                                state.command_input.push(':');
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            state.command_input.push(c);
-                        }
-                        KeyCode::Backspace => {
-                            state.command_input.pop();
-                        }
-                        _ => {}
-                    }
-                }
-                Mode::Register => {
-                    match key.code {
-                        KeyCode::Esc => {
-                            state.mode = Mode::Login;
-                            state.command_input.clear();
-                        }
-                        KeyCode::Enter => {
-                            let parts: Vec<&str> = state.command_input.split_whitespace().collect();
-                            if parts.len() == 3 {
-                                let username = parts[0];
-                                let password = parts[1];
-                                let email = parts[2];
-                                
-                                if let Some(ref sm) = state.sync_manager {
-                                    match sm.register(username, password, email).await {
-                                        Ok(user) => {
-                                            state.current_user = Some(user);
-                                            state.mode = Mode::Normal;
-                                        }
-                                        Err(_) => {
-                                            state.command_input = "Registration failed".to_string();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            state.command_input.push(c);
-                        }
-                        KeyCode::Backspace => {
-                            state.command_input.pop();
-                        }
-                        _ => {}
-                    }
-                }
                 Mode::Normal => {
                     match key.code {
                         KeyCode::Char('q') => break,
                         KeyCode::Char('j') | KeyCode::Down => state.next(),
                         KeyCode::Char('k') | KeyCode::Up => state.previous(),
                         KeyCode::Char(' ') => {
-                            if let Some(task) = state.tasks.get(state.selected) {
-                                if let Some(ref tm) = state.task_manager {
-                                    tm.toggle_done(&task.id).await?;
-                                    state.tasks = tm.get_all_tasks().await?;
+                            if let (Some(task), Some(ref sb), Some(ref user)) = 
+                                (state.tasks.get(state.selected), &state.supabase, &state.current_user) {
+                                match sb.toggle_done(&task.id, task.done).await {
+                                    Ok(_) => {
+                                        if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                            state.tasks = tasks;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to toggle task: {}", e);
+                                    }
                                 }
                             }
                         }
@@ -168,29 +91,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         KeyCode::Char('1') => {
-                            if let Some(task) = state.tasks.get_mut(state.selected) {
+                            if let (Some(task), Some(ref sb), Some(ref user)) = 
+                                (state.tasks.get_mut(state.selected), &state.supabase, &state.current_user) {
                                 task.priority = Priority::Low;
-                                if let Some(ref tm) = state.task_manager {
-                                    tm.update_task(task).await?;
-                                    state.tasks = tm.get_all_tasks().await?;
+                                if let Ok(_) = sb.update_task(task).await {
+                                    if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                        state.tasks = tasks;
+                                    }
                                 }
                             }
                         }
                         KeyCode::Char('2') => {
-                            if let Some(task) = state.tasks.get_mut(state.selected) {
+                            if let (Some(task), Some(ref sb), Some(ref user)) = 
+                                (state.tasks.get_mut(state.selected), &state.supabase, &state.current_user) {
                                 task.priority = Priority::Medium;
-                                if let Some(ref tm) = state.task_manager {
-                                    tm.update_task(task).await?;
-                                    state.tasks = tm.get_all_tasks().await?;
+                                if let Ok(_) = sb.update_task(task).await {
+                                    if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                        state.tasks = tasks;
+                                    }
                                 }
                             }
                         }
                         KeyCode::Char('3') => {
-                            if let Some(task) = state.tasks.get_mut(state.selected) {
+                            if let (Some(task), Some(ref sb), Some(ref user)) = 
+                                (state.tasks.get_mut(state.selected), &state.supabase, &state.current_user) {
                                 task.priority = Priority::High;
-                                if let Some(ref tm) = state.task_manager {
-                                    tm.update_task(task).await?;
-                                    state.tasks = tm.get_all_tasks().await?;
+                                if let Ok(_) = sb.update_task(task).await {
+                                    if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                        state.tasks = tasks;
+                                    }
                                 }
                             }
                         }
@@ -208,12 +137,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         KeyCode::Char('d') => {
-                            if let Some(task) = state.tasks.get(state.selected) {
-                                if let Some(ref tm) = state.task_manager {
-                                    tm.delete_task(&task.id).await?;
-                                    state.tasks = tm.get_all_tasks().await?;
-                                    if state.selected >= state.tasks.len() && state.selected > 0 {
-                                        state.selected -= 1;
+                            if let (Some(task), Some(ref sb), Some(ref user)) = 
+                                (state.tasks.get(state.selected), &state.supabase, &state.current_user) {
+                                let task_id = task.id.clone();
+                                match sb.delete_task(&task_id).await {
+                                    Ok(_) => {
+                                        if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                            state.tasks = tasks;
+                                            if state.selected >= state.tasks.len() && state.selected > 0 {
+                                                state.selected -= 1;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to delete task: {}", e);
                                     }
                                 }
                             }
@@ -265,18 +202,108 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             state.editing_task = None;
                         }
                         KeyCode::Enter => {
-                            if let Some(task_id) = &state.editing_task {
-                                if let Some(ref tm) = state.task_manager {
-                                    if let Some(task) = state.tasks.iter_mut().find(|t| &t.id == task_id) {
-                                        task.title = state.command_input.clone();
-                                        let _ = tm.update_task(task).await;
-                                        state.tasks = tm.get_all_tasks().await?;
+                            if let (Some(task_id), Some(ref sb), Some(ref user)) = 
+                                (&state.editing_task, &state.supabase, &state.current_user) {
+                                if let Some(task) = state.tasks.iter_mut().find(|t| &t.id == task_id) {
+                                    task.title = state.command_input.clone();
+                                    let _ = sb.update_task(task).await;
+                                    if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                        state.tasks = tasks;
                                     }
                                 }
                             }
                             state.mode = Mode::Normal;
                             state.command_input.clear();
                             state.editing_task = None;
+                        }
+                        KeyCode::Char(c) => {
+                            state.command_input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            state.command_input.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                Mode::Login => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            std::process::exit(0);
+                        }
+                        KeyCode::Enter => {
+                            let parts: Vec<&str> = state.command_input.split_whitespace().collect();
+                            if parts.len() == 2 {
+                                let username = parts[0];
+                                let password = parts[1];
+                                
+                                if let Some(ref sb) = state.supabase {
+                                    match sb.login(username, password).await {
+                                        Ok(user) => {
+                                            info!("User logged in: {}", user.username);
+                                            let user_id = user.id.clone();
+                                            state.current_user = Some(user);
+                                            state.mode = Mode::Normal;
+                                            
+                                            if let Some(ref sb) = state.supabase {
+                                                match sb.get_tasks(&user_id).await {
+                                                    Ok(tasks) => state.tasks = tasks,
+                                                    Err(e) => {
+                                                        error!("Failed to load tasks: {}", e);
+                                                        state.status_message = Some("Failed to load tasks".to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            state.command_input = "Login failed. Press : to register".to_string();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char(':') => {
+                            if state.command_input.is_empty() {
+                                state.mode = Mode::Register;
+                                state.command_input.clear();
+                            } else {
+                                state.command_input.push(':');
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            state.command_input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            state.command_input.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                Mode::Register => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            state.mode = Mode::Login;
+                            state.command_input.clear();
+                        }
+                        KeyCode::Enter => {
+                            let parts: Vec<&str> = state.command_input.split_whitespace().collect();
+                            if parts.len() == 3 {
+                                let username = parts[0];
+                                let password = parts[1];
+                                let email = parts[2];
+                                
+                                if let Some(ref sb) = state.supabase {
+                                    match sb.register(username, email, password).await {
+                                        Ok(user) => {
+                                            info!("User registered: {}", user.username);
+                                            state.current_user = Some(user);
+                                            state.mode = Mode::Normal;
+                                        }
+                                        Err(e) => {
+                                            state.command_input = format!("Registration failed: {}", e);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         KeyCode::Char(c) => {
                             state.command_input.push(c);
@@ -296,11 +323,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn handle_command(
-    state: &mut AppState,
-    ai: &AIAssistant,
-) -> Result<(), Box<dyn std::error::Error>> {
-
+async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Box<dyn std::error::Error>> {
     let parts: Vec<&str> = state.command_input.trim().split_whitespace().collect();
     if parts.is_empty() {
         return Ok(());
@@ -311,54 +334,46 @@ async fn handle_command(
             if parts.len() > 1 {
                 let input = parts[1..].join(" ");
                 let task = ai.parse_task(&input).await?;
-
-                if let Some(ref tm) = state.task_manager {
-                    tm.create_task(&task).await?;
-                    state.tasks = tm.get_all_tasks().await?;
+                
+                info!("Task created: {}", task.title);
+                
+                if let (Some(ref sb), Some(ref user)) = (&state.supabase, &state.current_user) {
+                    sb.create_task(&task, &user.id).await?;
+                    state.tasks = sb.get_tasks(&user.id).await?;
+                    state.status_message = Some("Task added!".to_string());
                 }
             }
         }
-
         "done" => {
-            if let Some(task) = state.tasks.get(state.selected) {
-                if let Some(ref tm) = state.task_manager {
-                    tm.toggle_done(&task.id).await?;
-                    state.tasks = tm.get_all_tasks().await?;
-                }
+            if let (Some(task), Some(ref sb), Some(ref user)) = 
+                (state.tasks.get(state.selected), &state.supabase, &state.current_user) {
+                sb.toggle_done(&task.id, task.done).await?;
+                state.tasks = sb.get_tasks(&user.id).await?;
             }
         }
-
         "sync" => {
-            if let (Some(ref user), Some(ref sm)) =
-                (&state.current_user, &state.sync_manager)
-            {
-                sm.sync_tasks(&user.id, &state.tasks).await?;
-                state.command_input = "Tasks synced!".to_string();
-                return Ok(());
+            if let (Some(ref sb), Some(ref user)) = (&state.supabase, &state.current_user) {
+                state.tasks = sb.get_tasks(&user.id).await?;
+                state.status_message = Some("Tasks synced!".to_string());
             }
+        }
+        "quit" | "q" => {
+            std::process::exit(0);
         }
         "config" => {
             if parts.len() == 1 {
-                state.command_input = format!("Config saved at: {:?}", dirs::home_dir().unwrap_or_default());
+                state.status_message = Some(format!("Config: {:?}", dirs::home_dir().unwrap_or_default()));
             } else if parts.len() == 3 {
-                // :config <action> <key>
-                // Example: :config move_down h
                 let action = parts[1];
                 let key = parts[2];
                 state.config.keybindings.insert(action.to_string(), key.to_string());
                 let _ = state.config.save();
-                state.command_input = format!("Keybinding updated: {} -> {}", action, key);
+                state.status_message = Some(format!("Keybinding updated: {} -> {}", action, key));
             }
         }
-
-        "quit" | "q" => {
-            std::process::exit(0);
-        }
-
         _ => {}
     }
-
+    
     state.command_input.clear();
     Ok(())
 }
-
