@@ -52,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut g_pressed = false;
 
     loop {
+        state.clear_old_status();
         terminal.draw(|f| {
             ui::render(f, &state);
         })?;
@@ -63,6 +64,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('q') => break,
                         KeyCode::Char('j') | KeyCode::Down => state.next(),
                         KeyCode::Char('k') | KeyCode::Up => state.previous(),
+                        
+                        // Move task up (Shift+K)
+                        KeyCode::Char('K') => {
+                            if state.selected > 0 && !state.tasks.is_empty() {
+                                if let (Some(ref sb), Some(ref user)) = (&state.supabase, &state.current_user) {
+                                    // Swap positions
+                                    let current_pos = state.tasks[state.selected].position;
+                                    let above_pos = state.tasks[state.selected - 1].position;
+                                    
+                                    state.tasks[state.selected].position = above_pos;
+                                    state.tasks[state.selected - 1].position = current_pos;
+                                    
+                                    // Update in database
+                                    let tasks_to_update = vec![
+                                        state.tasks[state.selected].clone(),
+                                        state.tasks[state.selected - 1].clone(),
+                                    ];
+                                    
+                                    if let Ok(_) = sb.update_positions(&tasks_to_update).await {
+                                        state.selected -= 1;
+                                        if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                            state.tasks = tasks;
+                                        }
+                                        state.set_status("Task moved up".to_string());
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Move task down (Shift+J)
+                        KeyCode::Char('J') => {
+                            if state.selected < state.tasks.len() - 1 && !state.tasks.is_empty() {
+                                if let (Some(ref sb), Some(ref user)) = (&state.supabase, &state.current_user) {
+                                    // Swap positions
+                                    let current_pos = state.tasks[state.selected].position;
+                                    let below_pos = state.tasks[state.selected + 1].position;
+                                    
+                                    state.tasks[state.selected].position = below_pos;
+                                    state.tasks[state.selected + 1].position = current_pos;
+                                    
+                                    // Update in database
+                                    let tasks_to_update = vec![
+                                        state.tasks[state.selected].clone(),
+                                        state.tasks[state.selected + 1].clone(),
+                                    ];
+                                    
+                                    if let Ok(_) = sb.update_positions(&tasks_to_update).await {
+                                        state.selected += 1;
+                                        if let Ok(tasks) = sb.get_tasks(&user.id).await {
+                                            state.tasks = tasks;
+                                        }
+                                        state.set_status("Task moved down".to_string());
+                                    }
+                                }
+                            }
+                        }
+                        
                         KeyCode::Char(' ') => {
                             if let (Some(task), Some(ref sb), Some(ref user)) = 
                                 (state.tasks.get(state.selected), &state.supabase, &state.current_user) {
@@ -249,7 +307,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     Ok(tasks) => state.tasks = tasks,
                                                     Err(e) => {
                                                         error!("Failed to load tasks: {}", e);
-                                                        state.status_message = Some("Failed to load tasks".to_string());
+                                                        state.set_status("Failed to load tasks".to_string());
                                                     }
                                                 }
                                             }
@@ -333,14 +391,17 @@ async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Bo
         "add" => {
             if parts.len() > 1 {
                 let input = parts[1..].join(" ");
-                let task = ai.parse_task(&input).await?;
+                let mut task = ai.parse_task(&input).await?;
                 
                 info!("Task created: {}", task.title);
                 
                 if let (Some(ref sb), Some(ref user)) = (&state.supabase, &state.current_user) {
+                    let max_position = state.tasks.iter().map(|t| t.position).max().unwrap_or(-1);
+                    task.position = max_position + 1;
+                    
                     sb.create_task(&task, &user.id).await?;
                     state.tasks = sb.get_tasks(&user.id).await?;
-                    state.status_message = Some("Task added!".to_string());
+                    state.set_status("Task added!".to_string());
                 }
             }
         }
@@ -354,7 +415,7 @@ async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Bo
         "sync" => {
             if let (Some(ref sb), Some(ref user)) = (&state.supabase, &state.current_user) {
                 state.tasks = sb.get_tasks(&user.id).await?;
-                state.status_message = Some("Tasks synced!".to_string());
+                state.set_status("Tasks synced!".to_string());
             }
         }
         "quit" | "q" => {
@@ -362,13 +423,13 @@ async fn handle_command(state: &mut AppState, ai: &AIAssistant) -> Result<(), Bo
         }
         "config" => {
             if parts.len() == 1 {
-                state.status_message = Some(format!("Config: {:?}", dirs::home_dir().unwrap_or_default()));
+                state.set_status(format!("Config: {:?}", dirs::home_dir().unwrap_or_default()));
             } else if parts.len() == 3 {
                 let action = parts[1];
                 let key = parts[2];
                 state.config.keybindings.insert(action.to_string(), key.to_string());
                 let _ = state.config.save();
-                state.status_message = Some(format!("Keybinding updated: {} -> {}", action, key));
+                state.set_status(format!("Keybinding updated: {} -> {}", action, key));
             }
         }
         _ => {}
