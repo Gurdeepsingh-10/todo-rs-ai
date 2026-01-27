@@ -8,6 +8,8 @@ use ratatui::{
 use crate::core::{Task, Priority};
 
 use crate::config::{Config, CommandHistory};
+use std::time::{Instant, Duration};
+
 
 pub struct AppState {
     pub tasks: Vec<Task>,
@@ -21,6 +23,7 @@ pub struct AppState {
     pub command_history: CommandHistory,
     pub status_message: Option<String>,
     pub supabase: Option<crate::db::SupabaseClient>,   // Changed
+    pub status_timer: Option<Instant>
 }
 
 pub enum Mode {
@@ -46,12 +49,25 @@ impl AppState {
             command_history: CommandHistory::new(),
             status_message: None,
             supabase: None,
+            status_timer: None,
         }
     }
 
     pub fn next(&mut self) {
         if !self.tasks.is_empty() {
             self.selected = (self.selected + 1) % self.tasks.len();
+        }
+    }
+    pub fn set_status(&mut self, message: String) {
+        self.status_message = Some(message);
+        self.status_timer = Some(Instant::now());
+    }
+    pub fn clear_old_status(&mut self) {
+        if let Some(timer) = self.status_timer {
+            if timer.elapsed() > Duration::from_secs(2) {
+                self.status_message = None;
+                self.status_timer = None;
+            }
         }
     }
 
@@ -122,14 +138,17 @@ pub fn render(f: &mut Frame, state: &AppState) {
         .block(Block::default().borders(Borders::ALL).title("Tasks"));
     f.render_widget(list, chunks[1]);
 
-    let status_text = match state.mode {
-        Mode::Normal => {
-            "q: quit | j/k: navigate | space: toggle | :: command | ?: help"
+    let status_text = if let Some(msg) = &state.status_message {
+        msg.clone()
+    } else {
+        match state.mode {
+            Mode::Normal => {
+                "q: quit | j/k: navigate | Shift+J/K: reorder | space: toggle | :: command | ?: help".to_string()
+            }
+            Mode::Command => format!(":{}", state.command_input),
+            Mode::Edit => format!("Edit: {}", state.command_input),
+            Mode::Login | Mode::Register => state.command_input.clone(),
         }
-        Mode::Command => &format!(":{}", state.command_input),
-        Mode::Edit => &format!("Edit: {}", state.command_input),
-        Mode::Login => "Login mode",
-        Mode::Register => "Register mode",
     };
 
 
@@ -149,11 +168,15 @@ fn render_help(f: &mut Frame) {
         Line::from("  gg            - Go to top"),
         Line::from("  G             - Go to bottom"),
         Line::from(""),
+        Line::from(vec![Span::styled("Reorder Tasks:", Style::default().fg(Color::Yellow))]),
+        Line::from("  Shift+J       - Move task down in list"),
+        Line::from("  Shift+K       - Move task up in list"),
+        Line::from(""),
         Line::from(vec![Span::styled("Actions:", Style::default().fg(Color::Yellow))]),
         Line::from("  space         - Toggle task done/undone"),
-        Line::from("  d             - Delete selected task"),
-        Line::from("  e             - Edit selected task"),
-        Line::from("  1/2/3         - Set priority (1=Low, 2=Med, 3=High)"),
+        Line::from("  d             - Delete task"),
+        Line::from("  e             - Edit task"),
+        Line::from("  1/2/3         - Set priority (Low/Medium/High)"),
         Line::from("  ?             - Toggle this help screen"),
         Line::from("  q             - Quit application"),
         Line::from(""),
@@ -163,20 +186,17 @@ fn render_help(f: &mut Frame) {
         Line::from(""),
         Line::from("  :done                    - Mark selected task as done"),
         Line::from(""),
-        Line::from("  :sync              - Sync tasks"),
+        Line::from("  :sync                    - Sync tasks from cloud"),
+        Line::from(""),
         Line::from("  :quit or :q              - Quit application"),
         Line::from(""),
-        Line::from(vec![Span::styled("Edit/Command Mode Controls:", Style::default().fg(Color::Yellow))]),
-        Line::from("  Esc           - Cancel and exit mode"),
-        Line::from("  Enter         - Confirm changes"),
+        Line::from(vec![Span::styled("Command Mode Controls:", Style::default().fg(Color::Yellow))]),
+        Line::from("  Esc           - Exit command mode"),
+        Line::from("  Enter         - Execute command"),
         Line::from("  Backspace     - Delete character"),
+        Line::from("  ↑/↓           - Navigate command history"),
         Line::from(""),
         Line::from(vec![Span::styled("Press ? to close this help", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]),
-        Line::from(vec![Span::styled("Configuration:", Style::default().fg(Color::Yellow))]),
-        Line::from("  :config                  - Show config location"),
-        Line::from("  :config <action> <key>   - Change keybinding"),
-        Line::from("                             Example: :config move_down h"),
-        Line::from(""),
     ];
 
     let help = Paragraph::new(help_text)
@@ -184,7 +204,7 @@ fn render_help(f: &mut Frame) {
         .alignment(Alignment::Left);
     
     let area = f.size();
-    f.render_widget(help, area);
+    f.render_widget(help , area);
 }
 
 fn render_auth(f: &mut Frame, state: &AppState) {
