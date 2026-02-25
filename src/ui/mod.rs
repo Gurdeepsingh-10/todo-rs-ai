@@ -214,17 +214,33 @@ fn render_auth(f: &mut Frame, state: &AppState) {
         _ => ("Auth", ""),
     };
 
-    let text = vec![
-        Line::from(vec![Span::styled(title, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
-        Line::from(""),
-        Line::from(instruction),
-        Line::from(""),
-        Line::from(format!("> {}", state.command_input)),
-    ];
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(2)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(1),
+        ])
+        .split(f.size());
+
+    let title_widget = Paragraph::new(title)
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL));
     
-    let para = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title("Authentication"))
-        .alignment(Alignment::Left);
+    f.render_widget(title_widget, chunks[0]);
+
+    let instruction_widget = Paragraph::new(instruction)
+        .style(Style::default().fg(Color::Yellow))
+        .alignment(Alignment::Center);
     
-    f.render_widget(para, f.size());
+    f.render_widget(instruction_widget, chunks[1]);
+
+    let input_widget = Paragraph::new(format!("> {}", state.command_input))
+        .style(Style::default().fg(Color::White))
+        .alignment(Alignment::Left)
+        .block(Block::default().borders(Borders::ALL).title("Input"));
+    
+    f.render_widget(input_widget, chunks[2]);
 }
