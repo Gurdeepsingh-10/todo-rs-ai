@@ -93,7 +93,7 @@ impl Config {
         path.push("config.json");
         path
     }
-
+    #[allow(dead_code)]
     pub fn get_key(&self, action: &str) -> Option<String> {
         self.keybindings.get(action).cloned()
     }
@@ -148,11 +148,11 @@ impl CommandHistory {
         self.current_index = None;
     }
 }
-
+#[allow(dead_code)]
 pub struct CommandPalette {
     commands: Vec<Command>,
 }
-
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Command {
     pub name: String,
@@ -160,6 +160,7 @@ pub struct Command {
     pub usage: String,
 }
 
+#[allow(dead_code)]
 impl CommandPalette {
     pub fn new() -> Self {
         let commands = vec![

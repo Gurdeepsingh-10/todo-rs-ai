@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use crate::core::Task;
 
+
+#[allow(dead_code)]
 pub struct TaskCache {
     cache: HashMap<String, Task>,
 }
 
+
+#[allow(dead_code)]
 impl TaskCache {
     pub fn new() -> Self {
         Self {
